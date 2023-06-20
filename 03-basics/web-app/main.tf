@@ -2,7 +2,7 @@ terraform {
   # Assumes s3 bucket and dynamo DB table already set up
   # See /code/03-basics/aws-backend
   backend "s3" {
-    bucket         = "devops-directive-tf-state"
+    bucket         = "devops-directive-tf-state-deez"
     key            = "03-basics/web-app/terraform.tfstate"
     region         = "us-east-1"
     dynamodb_table = "terraform-state-locking"
@@ -21,6 +21,37 @@ provider "aws" {
   region = "us-east-1"
 }
 
+#######################################################################
+#### CONFIGURING DEFAULT VPC AND SUBNETS ##
+#######################################################################
+data "aws_vpc" "default_vpc" {
+  default = true
+}
+
+data "aws_subnet_ids" "default_subnet" {
+  vpc_id = data.aws_vpc.default_vpc.id
+}
+
+#######################################################################
+#### SECURITY GROUP FOR EC2 INSTANCES WITH TCP ACCESS FROM PORT 8080 ##
+#######################################################################
+resource "aws_security_group" "instances" {
+  name = "instance-security-group"
+}
+
+resource "aws_security_group_rule" "allow_http_inbound" {
+  type              = "ingress"
+  security_group_id = aws_security_group.instances.id
+
+  from_port   = 8080
+  to_port     = 8080
+  protocol    = "tcp"
+  cidr_blocks = ["0.0.0.0/0"]
+}
+##########################################################################
+######################
+## 2 EC2 INSTANCES ###
+######################
 resource "aws_instance" "instance_1" {
   ami             = "ami-011899242bb902164" # Ubuntu 20.04 LTS // us-east-1
   instance_type   = "t2.micro"
@@ -31,6 +62,7 @@ resource "aws_instance" "instance_1" {
               python3 -m http.server 8080 &
               EOF
 }
+
 
 resource "aws_instance" "instance_2" {
   ami             = "ami-011899242bb902164" # Ubuntu 20.04 LTS // us-east-1
@@ -43,6 +75,11 @@ resource "aws_instance" "instance_2" {
               EOF
 }
 
+#THE ABOVE 2 EC2 INSTANCES ARE TIED TO THE INSTANCES SECURITY GROUP
+##########################################################################
+#############
+# S3 BUCKET #
+#############
 resource "aws_s3_bucket" "bucket" {
   bucket_prefix = "devops-directive-web-app-data"
   force_destroy = true
@@ -63,94 +100,10 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "bucket_crypto_con
     }
   }
 }
-
-data "aws_vpc" "default_vpc" {
-  default = true
-}
-
-data "aws_subnet_ids" "default_subnet" {
-  vpc_id = data.aws_vpc.default_vpc.id
-}
-
-resource "aws_security_group" "instances" {
-  name = "instance-security-group"
-}
-
-resource "aws_security_group_rule" "allow_http_inbound" {
-  type              = "ingress"
-  security_group_id = aws_security_group.instances.id
-
-  from_port   = 8080
-  to_port     = 8080
-  protocol    = "tcp"
-  cidr_blocks = ["0.0.0.0/0"]
-}
-
-resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.load_balancer.arn
-
-  port = 80
-
-  protocol = "HTTP"
-
-  # By default, return a simple 404 page
-  default_action {
-    type = "fixed-response"
-
-    fixed_response {
-      content_type = "text/plain"
-      message_body = "404: page not found"
-      status_code  = 404
-    }
-  }
-}
-
-resource "aws_lb_target_group" "instances" {
-  name     = "example-target-group"
-  port     = 8080
-  protocol = "HTTP"
-  vpc_id   = data.aws_vpc.default_vpc.id
-
-  health_check {
-    path                = "/"
-    protocol            = "HTTP"
-    matcher             = "200"
-    interval            = 15
-    timeout             = 3
-    healthy_threshold   = 2
-    unhealthy_threshold = 2
-  }
-}
-
-resource "aws_lb_target_group_attachment" "instance_1" {
-  target_group_arn = aws_lb_target_group.instances.arn
-  target_id        = aws_instance.instance_1.id
-  port             = 8080
-}
-
-resource "aws_lb_target_group_attachment" "instance_2" {
-  target_group_arn = aws_lb_target_group.instances.arn
-  target_id        = aws_instance.instance_2.id
-  port             = 8080
-}
-
-resource "aws_lb_listener_rule" "instances" {
-  listener_arn = aws_lb_listener.http.arn
-  priority     = 100
-
-  condition {
-    path_pattern {
-      values = ["*"]
-    }
-  }
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.instances.arn
-  }
-}
-
-
+##########################################################################
+##################################################################################
+#### SECURITY GROUP FOR LOAD BALANCER WITH INGRESS TCP 80 AND EGRESS EVERYTHING ##
+##################################################################################
 resource "aws_security_group" "alb" {
   name = "alb-security-group"
 }
@@ -176,8 +129,21 @@ resource "aws_security_group_rule" "allow_alb_all_outbound" {
   cidr_blocks = ["0.0.0.0/0"]
 
 }
+##########################################################################
+###########################################
+#### CONFIGURING DEFAULT VPC AND SUBNETS ##
+###########################################
+data "aws_vpc" "default_vpc" {
+  default = true
+}
 
+data "aws_subnet_ids" "default_subnet" {
+  vpc_id = data.aws_vpc.default_vpc.id
+}
 
+########################
+# INIT A LOAD BALANCER #
+########################
 resource "aws_lb" "load_balancer" {
   name               = "web-app-lb"
   load_balancer_type = "application"
@@ -185,6 +151,91 @@ resource "aws_lb" "load_balancer" {
   security_groups    = [aws_security_group.alb.id]
 
 }
+
+###########################################
+## DEFAULT LOAD BALANCER LISTENING GROUP ###
+###########################################
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.load_balancer.arn
+
+  port = 80
+
+  protocol = "HTTP"
+
+  # By default, return a simple 404 page
+  default_action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "404: page not found"
+      status_code  = 404
+    }
+  }
+}
+
+#################################################
+## LOAD BALANCER TARGET GROUP ##################
+## THIS IS WHERE WE WANT THE LOAD BALANCE TO GO TO 
+#################################################
+
+resource "aws_lb_target_group" "instances" {
+  name     = "example-target-group"
+  port     = 8080
+  protocol = "HTTP"
+  vpc_id   = data.aws_vpc.default_vpc.id
+
+  health_check {
+    path                = "/"
+    protocol            = "HTTP"
+    matcher             = "200"
+    interval            = 15
+    timeout             = 3
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+  }
+}
+
+#####################################################
+## ROUTING THE LOAD BALANCER TO THE EC2 INSTANCES ###
+#####################################################
+
+resource "aws_lb_target_group_attachment" "instance_1" {
+  target_group_arn = aws_lb_target_group.instances.arn
+  target_id        = aws_instance.instance_1.id
+  port             = 8080
+}
+
+resource "aws_lb_target_group_attachment" "instance_2" {
+  target_group_arn = aws_lb_target_group.instances.arn
+  target_id        = aws_instance.instance_2.id
+  port             = 8080
+}
+
+#############################################################################################################
+## WHEN WE GO TO THE LOAD BALANCER IT WILL DIRECT FIRST TO HTTP GROUP AND THEN WILL FORWARD TO TARGET GROUP #
+## FROM TARGET IT WILL GO TO THE ATTATCHED 2 EC2 INSTANCES ##################################################
+#############################################################################################################
+resource "aws_lb_listener_rule" "instances" {
+  listener_arn = aws_lb_listener.http.arn
+  priority     = 100
+
+  condition {
+    path_pattern {
+      values = ["*"]
+    }
+  }
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.instances.arn
+  }
+}
+
+##############################################################################################################
+########################
+## CREATING ROUTE 53 ###
+########################
 
 resource "aws_route53_zone" "primary" {
   name = "devopsdeployed.com"
