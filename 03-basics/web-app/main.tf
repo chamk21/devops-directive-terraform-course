@@ -22,17 +22,6 @@ provider "aws" {
 }
 
 #######################################################################
-#### CONFIGURING DEFAULT VPC AND SUBNETS ##
-#######################################################################
-data "aws_vpc" "default_vpc" {
-  default = true
-}
-
-data "aws_subnet_ids" "default_subnet" {
-  vpc_id = data.aws_vpc.default_vpc.id
-}
-
-#######################################################################
 #### SECURITY GROUP FOR EC2 INSTANCES WITH TCP ACCESS FROM PORT 8080 ##
 #######################################################################
 resource "aws_security_group" "instances" {
