@@ -14,16 +14,17 @@ func TestTerraformHelloWorldExample(t *testing.T) {
 	terraformOptions := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
 		TerraformDir: "../../examples/hello-world",
 	})
-
+    //wait till evert=ything else is done
 	defer terraform.Destroy(t, terraformOptions)
-
+    
 	terraform.InitAndApply(t, terraformOptions)
 
 	instanceURL := terraform.Output(t, terraformOptions, "url")
 	tlsConfig := tls.Config{}
 	maxRetries := 30
 	timeBetweenRetries := 10 * time.Second
-
+    
+	//main function that does the retrying
 	http_helper.HttpGetWithRetryWithCustomValidation(
 		t, instanceURL, &tlsConfig, maxRetries, timeBetweenRetries, validate,
 	)
